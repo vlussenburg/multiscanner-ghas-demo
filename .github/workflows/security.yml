@@ -76,7 +76,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Trivy image scan → SARIF
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ needs.build.outputs.image }}
           format: sarif
@@ -144,10 +144,9 @@ jobs:
           target: ${{ vars.MAYHEM_WORKSPACE }}/api
           api-url: https://localhost:8443
           api-spec: https://localhost:8443/openapi.json
+          duration: ${{ github.event.inputs.mapi_duration || '120' }}
           sarif-report: mapi.sarif
           run-args: |
-            --duration
-            ${{ github.event.inputs.mapi_duration || '120' }}
             --experimental-rules
             --ignore-rule
             internal-server-error
