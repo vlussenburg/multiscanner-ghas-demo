@@ -17,7 +17,9 @@ on:
         type: string
 
 permissions:
-  contents: read
+  # contents: write needed by anchore/sbom-action when posting to the
+  # GitHub Dependency Submission API (Insights → Dependency graph → SBOM).
+  contents: write
   packages: write
   security-events: write
 
