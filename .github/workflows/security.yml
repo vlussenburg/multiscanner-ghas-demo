@@ -76,7 +76,7 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Trivy image scan → SARIF
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@0.36.0
         with:
           image-ref: ${{ needs.build.outputs.image }}
           format: sarif
@@ -151,8 +151,11 @@ jobs:
             --experimental-rules
             --ignore-rule
             internal-server-error
-      - uses: github/codeql-action/upload-sarif@v3
-        if: always()
+      - name: Upload Mayhem SARIF (if produced)
+        # Skips when MAYHEM_TOKEN is missing or mapi-action exits before
+        # writing the SARIF — keeps the workflow green during initial setup.
+        if: always() && hashFiles('mapi.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: mapi.sarif
           category: Mayhem-API
