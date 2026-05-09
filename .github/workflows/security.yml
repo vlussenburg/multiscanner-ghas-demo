@@ -1,0 +1,161 @@
+name: Security Scanning — Multi-Scanner → GHAS
+
+# Demonstrates the "unified surface" thesis: four OSS scanners (one DAST,
+# one SAST, one SCA, one SBOM) all converge in the GitHub Security tab via
+# SARIF. None are GitHub-native. The platform value is the surface.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mapi_duration:
+        description: "Mayhem API run duration (seconds)"
+        required: true
+        default: "120"
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+
+env:
+  REGISTRY: ghcr.io
+  MAYHEM_URL: https://app.mayhem.security
+
+jobs:
+  build:
+    name: Build · API image
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute image ref
+        id: image
+        run: |
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=${{ env.REGISTRY }}/${REPO}/api:${{ github.sha }}" >> $GITHUB_OUTPUT
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v5
+        with:
+          context: api
+          push: true
+          tags: ${{ steps.image.outputs.image }}
+
+  semgrep:
+    name: SAST · Semgrep OSS
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+      - run: semgrep scan --config=auto --sarif --output=semgrep.sarif api || true
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: Semgrep-OSS
+
+  trivy:
+    name: SCA · Trivy
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Trivy image scan → SARIF
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ needs.build.outputs.image }}
+          format: sarif
+          output: trivy.sarif
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy.sarif
+          category: Trivy
+
+  sbom:
+    name: SBOM · Syft
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: anchore/sbom-action@v0
+        with:
+          image: ${{ needs.build.outputs.image }}
+          format: spdx-json
+          artifact-name: sbom-spdx.json
+          upload-artifact: true
+          # Posts to GitHub's native SBOM endpoint so it shows under
+          # Insights → Dependency graph → SBOM
+          dependency-snapshot: true
+
+  mapi:
+    name: DAST · Mayhem API
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Spin up API + Redis
+        run: |
+          export IMAGE=${{ needs.build.outputs.image }}
+          docker compose up -d
+          # Wait for the API to respond (HTTPS, self-signed)
+          for i in $(seq 1 60); do
+            if curl -ks https://localhost:8443/openapi.json > /dev/null; then
+              echo "API up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "API did not come up"; docker compose logs; exit 1
+      - name: Run Mayhem API DAST
+        uses: forallsecure/mapi-action@v1
+        continue-on-error: true
+        env:
+          MAPI_BASIC_AUTH: "me@me.com:123456"
+        with:
+          mayhem-url: ${{ env.MAYHEM_URL }}
+          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
+          target: ${{ vars.MAYHEM_WORKSPACE }}/api
+          api-url: https://localhost:8443
+          api-spec: https://localhost:8443/openapi.json
+          sarif-report: mapi.sarif
+          run-args: |
+            --duration
+            ${{ github.event.inputs.mapi_duration || '120' }}
+            --experimental-rules
+            --ignore-rule
+            internal-server-error
+      - uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: mapi.sarif
+          category: Mayhem-API
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

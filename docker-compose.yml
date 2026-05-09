@@ -1,0 +1,25 @@
+# Used by the Mayhem API job in .github/workflows/security.yml,
+# and by anyone who wants to run the demo locally.
+#
+# In CI, the api image is pre-built and pushed to GHCR; we pull it via
+# the IMAGE env var. Locally, docker compose will build from ./api.
+
+services:
+  api:
+    build: ./api
+    image: ${IMAGE:-mayhem-demo-api:local}
+    ports:
+      - "8443:8443"
+    depends_on:
+      - redis
+    healthcheck:
+      test: ["CMD", "curl", "-fk", "https://localhost:8443/openapi.json"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    tmpfs:
+      - /data
