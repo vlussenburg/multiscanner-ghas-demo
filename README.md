@@ -11,7 +11,7 @@ The thesis: any scanner that produces SARIF lands in GHAS, regardless of vendor.
 | **DAST** (API) | `forallsecure/mapi-action` | Mayhem | SARIF | Security → `Mayhem-API` |
 | **SAST** (Python) | `semgrep/semgrep` (`--config=auto`) | Semgrep | SARIF | Security → `Semgrep-OSS` |
 | **SCA** (image) | `aquasecurity/trivy-action` | Aqua | SARIF | Security → `Trivy` |
-| **SBOM** (image) | `anchore/sbom-action` (Syft) | Anchore | SPDX-JSON | Build artifact + Insights → Dependency graph |
+| **SBOM** (image) | `anchore/sbom-action` (Syft) | Anchore | SPDX-JSON | Workflow artifact (downloadable from the run) |
 
 Three SARIF uploads → three category filters in the Security-tab dropdown. Three different vendors, one unified UI, one triage workflow, one audit trail. **That's the slide-3 thesis, demonstrated.**
 
@@ -87,7 +87,7 @@ Bump `mapi_duration` to 600 for a deeper DAST sweep (~7 min total).
 - Semgrep findings (Python source patterns) — category `Semgrep-OSS`
 - Trivy findings (vulnerable Python packages, base-image CVEs) — category `Trivy`
 
-**Insights → Dependency graph → SBOM** shows the SPDX SBOM Syft generated.
+The SPDX SBOM Syft generated is attached to the workflow run as a downloadable artifact (`sbom-spdx.json`).
 
 Filter by category in the Security tab dropdown to show "this is the SARIF from scanner X" — that's the live demo of the unified surface.
 
@@ -95,7 +95,7 @@ Filter by category in the Security tab dropdown to show "this is the SARIF from 
 
 - Three different vendors (Mayhem, Semgrep, Aqua/Trivy), one Security tab. The pattern works for Snyk, Veracode, Checkmarx, Grype, anything that outputs SARIF.
 - The Action call differs per scanner — but **every** SARIF upload uses the canonical `github/codeql-action/upload-sarif@v3`. SARIF is the open contract; Code Scanning is the open surface.
-- SBOM via `anchore/sbom-action` also pushes to GitHub's **Dependency Graph snapshot endpoint** (`dependency-snapshot: true`), so the SBOM shows up in two places: as a build artifact and in the repo's native dependency graph.
+- SBOM via `anchore/sbom-action` produces a downloadable SPDX-JSON artifact on every run (`sbom-spdx.json`). The action also supports posting to GitHub's Dependency-Graph snapshot endpoint, but that path is currently 500-ing on the GitHub side as of 2026-05; we keep the artifact-only path.
 - This is the `~$X / committer / month` value of GHAS. The customer keeps their existing scanner stack; GitHub provides triage, dedup, audit, and PR integration on top.
 
 ## Local sanity check (no GitHub needed)
