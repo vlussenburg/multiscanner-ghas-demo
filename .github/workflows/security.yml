@@ -108,9 +108,9 @@ jobs:
           format: spdx-json
           artifact-name: sbom-spdx.json
           upload-artifact: true
-          # Posts to GitHub's native SBOM endpoint so it shows under
-          # Insights → Dependency graph → SBOM
-          dependency-snapshot: true
+          # NOTE: dependency-snapshot upload to GitHub's Dependency Graph is
+          # disabled — the API was returning 500 on the snapshot payload as of
+          # 2026-05. The SPDX artifact above is the durable SBOM evidence.
 
   mapi:
     name: DAST · Mayhem API
