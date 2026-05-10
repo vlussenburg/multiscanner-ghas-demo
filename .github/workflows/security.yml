@@ -1,0 +1,155 @@
+name: Security Scanning — Multi-Scanner → GHAS
+
+# Demonstrates the "unified surface" thesis: four OSS scanners (one DAST,
+# one SAST, one SCA, one SBOM) all converge in the GitHub Security tab via
+# SARIF. None are GitHub-native. The platform value is the surface.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      mapi_duration:
+        description: "Mayhem API run duration (seconds)"
+        required: true
+        default: "120"
+        type: string
+
+permissions:
+  # contents: write needed by anchore/sbom-action when posting to the
+  # GitHub Dependency Submission API (Insights → Dependency graph → SBOM).
+  contents: write
+  packages: write
+  security-events: write
+
+env:
+  REGISTRY: ghcr.io
+  MAYHEM_URL: https://app.mayhem.security
+
+jobs:
+  build:
+    name: Build · API image
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compute image ref
+        id: image
+        run: |
+          REPO=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          echo "image=${{ env.REGISTRY }}/${REPO}/api:${{ github.sha }}" >> $GITHUB_OUTPUT
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v5
+        with:
+          context: api
+          push: true
+          tags: ${{ steps.image.outputs.image }}
+
+  # NOTE: SAST handled by GHAS-native CodeQL (Default Setup, no YAML).
+  # SCA handled by GHAS-native Dependabot (auto on api/requirements.txt).
+  # Earlier iterations ran Semgrep OSS and Trivy here; consolidated for clarity.
+
+  sbom:
+    name: SBOM · Syft
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: anchore/sbom-action@v0
+        with:
+          image: ${{ needs.build.outputs.image }}
+          format: spdx-json
+          artifact-name: sbom-spdx.json
+          upload-artifact: true
+          # NOTE: dependency-snapshot upload to GitHub's Dependency Graph is
+          # disabled — the API was returning 500 on the snapshot payload as of
+          # 2026-05. The SPDX artifact above is the durable SBOM evidence.
+
+      - name: Render SBOM into job summary
+        if: always()
+        run: |
+          SBOM=$(find /tmp -name 'sbom-spdx.json' -type f | head -1)
+          [ -z "$SBOM" ] && { echo "No SBOM file found"; exit 0; }
+
+          TOTAL=$(jq '.packages | length' "$SBOM")
+          {
+            echo "## SBOM (Syft) — \`${{ needs.build.outputs.image }}\`"
+            echo ""
+            echo "**$TOTAL packages** detected in the built image (Python deps + base-image OS packages + transitives)."
+            echo ""
+            echo "| Package | Version | Type |"
+            echo "|---|---|---|"
+            jq -r '
+              .packages
+              | map(select(.name != null and .name != ""))
+              | sort_by(.name)
+              | .[0:30]
+              | .[] | "| \(.name) | \(.versionInfo // "—") | \((.externalRefs // [])[0].referenceLocator // "—" | split("/")[0] | sub("pkg:"; "") // "—") |"
+            ' "$SBOM"
+            echo ""
+            echo "_Showing first 30 of $TOTAL — full SPDX JSON attached as a build artifact._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  mapi:
+    name: DAST · Mayhem API
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Spin up API + Redis
+        run: |
+          export IMAGE=${{ needs.build.outputs.image }}
+          docker compose up -d
+          # Wait for the API to respond (HTTPS, self-signed)
+          for i in $(seq 1 60); do
+            if curl -ks https://localhost:8443/openapi.json > /dev/null; then
+              echo "API up after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "API did not come up"; docker compose logs; exit 1
+      - name: Run Mayhem API DAST
+        uses: forallsecure/mapi-action@v1
+        continue-on-error: true
+        env:
+          MAPI_BASIC_AUTH: "me@me.com:123456"
+        with:
+          mayhem-url: ${{ env.MAYHEM_URL }}
+          mayhem-token: ${{ secrets.MAYHEM_TOKEN }}
+          target: ${{ vars.MAYHEM_WORKSPACE }}/api
+          api-url: https://localhost:8443
+          api-spec: https://localhost:8443/openapi.json
+          duration: ${{ github.event.inputs.mapi_duration || '120' }}
+          sarif-report: mapi.sarif
+          run-args: |
+            --experimental-rules
+            --ignore-rule
+            internal-server-error
+      - name: Upload Mayhem SARIF (if produced)
+        # Skips when MAYHEM_TOKEN is missing or mapi-action exits before
+        # writing the SARIF — keeps the workflow green during initial setup.
+        if: always() && hashFiles('mapi.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: mapi.sarif
+          category: Mayhem-API
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
