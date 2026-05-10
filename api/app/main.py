@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field, field_validator
 from redis import Redis
 
 from app.config import settings
+from app import admin
 
 app = FastAPI(title="Location Service", version="1.0.0")
 security = HTTPBasic()
@@ -26,6 +27,8 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 redis_client = Redis(host=settings.REDIS_HOST, port=settings.REDIS_PORT)
+
+app.include_router(admin.router)
 
 _AUTH_USER = b"me@me.com"
 _AUTH_PASS = b"123456"
