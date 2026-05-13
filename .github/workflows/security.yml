@@ -22,6 +22,8 @@ permissions:
   contents: write
   packages: write
   security-events: write
+  # pull-requests: write needed by mapi-action to post findings as PR comments.
+  pull-requests: write
 
 env:
   REGISTRY: ghcr.io
