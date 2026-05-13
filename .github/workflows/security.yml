@@ -129,7 +129,6 @@ jobs:
           echo "API did not come up"; docker compose logs; exit 1
       - name: Run Mayhem API DAST
         uses: forallsecure/mapi-action@v1
-        continue-on-error: true
         env:
           MAPI_BASIC_AUTH: "me@me.com:123456"
         with:
